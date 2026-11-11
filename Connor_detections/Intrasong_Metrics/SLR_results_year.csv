@@ -1,0 +1,8 @@
+X_variable,Y_variable,Intercept,Slope,Pseudo_R_squared,p_value_slope,n_obs,Spearman_r,Spearman_p,Equation
+year,B_notes,0.9999,0.0,-0.0,9.999e-01,18928,0.1121,5.406e-54,"B_notes = 0.9999 + (0.0 × year)   (Pseudo-R²=-0.0, p=9.999e-01, n=18928)"
+year,prev_ipi,-882.6387,0.467245,0.0015,9.351e-14,17113,0.0668,2.067e-18,"prev_ipi = -882.6387 + (0.467245 × year)   (Pseudo-R²=0.0015, p=9.351e-14, n=17113)"
+year,next_ipi,-882.6387,0.467245,0.0015,9.351e-14,17113,0.0668,2.067e-18,"next_ipi = -882.6387 + (0.467245 × year)   (Pseudo-R²=0.0015, p=9.351e-14, n=17113)"
+year,A_to_B_INI,-554.0002,0.3,0.0124,2.798e-70,18709,0.1471,6.095e-91,"A_to_B_INI = -554.0002 + (0.3 × year)   (Pseudo-R²=0.0124, p=2.798e-70, n=18709)"
+year,Average_B_INI,-941.7296,0.492187,0.0527,3.224e-144,5697,0.3208,1.507e-136,"Average_B_INI = -941.7296 + (0.492187 × year)   (Pseudo-R²=0.0527, p=3.224e-144, n=5697)"
+year,Average_A_frequency,158.1964,-0.071429,0.4636,0.000e+00,18928,-0.8567,0.000e+00,"Average_A_frequency = 158.1964 + (-0.071429 × year)   (Pseudo-R²=0.4636, p=0.000e+00, n=18928)"
+year,Average_B_frequency,165.8998,-0.075,0.2406,0.000e+00,18852,-0.6253,0.000e+00,"Average_B_frequency = 165.8998 + (-0.075 × year)   (Pseudo-R²=0.2406, p=0.000e+00, n=18852)"

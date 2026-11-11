@@ -1,0 +1,514 @@
+
+%%%%%%%%%%%%%%%%%%%%%%%%%%% start of configuration %%%%%%%%%%%%%%%%%%%%%%%%%%%
+clear all
+close all
+SECONDS_IN_DAY=60*60*24;
+datetime_1970=datenum(1970,1,1);
+SNR_LENGTH=4;
+THRESH=0.38;
+CHUNK=(1); %1/2 hour chunk/Users/wader/Desktop/whaletracks/whaletracks/detection/main_detection.pys
+PLOTFLAG=1;
+MINSECONDS=120; %120 seconds minimum of data
+
+
+
+%Get data if using Iris fetch
+%Add javapath
+javaaddpath('/Users/connor.hipp/Desktop/MATLAB/irisFetch-matlab-2.0.12');
+%Get data using iris fetch
+
+startdate='2015-10-28T00:00:00.000';
+startdatenum=datenum(startdate,'yyyy-mm-ddTHH:MM:SS');
+startchunk=startdatenum;
+enddate='2016-01-31T00:00:00.000';
+enddatenum=datenum(enddate,'yyyy-mm-ddTHH:MM:SS');
+
+
+duration=[];
+end_epoch=[];
+end_time=[];
+min_signal=[];
+peak_signal=[];
+peak_epoch=[];
+peak_time=[];
+start_time=[];
+start_epoch=[];
+snr=[];
+ambient_snr=[];
+peak_frequency=[];
+start_frequency=[];
+end_frequency=[];
+peak_frequency_std=[];
+start_frequency_std=[];
+end_frequency_std=[];
+threshold=[];
+station_code=[];
+network_code=[];
+peak_amp=[];
+med_amp=[];
+preceding_amp=[];
+
+init_T=table(duration,end_epoch,end_time,min_signal,...
+    peak_signal,peak_epoch,peak_time,start_epoch,start_time,snr,...
+    ambient_snr,peak_frequency,start_frequency, end_frequency,...
+    peak_frequency_std, start_frequency_std,end_frequency_std,threshold,...
+    station_code,network_code,peak_amp,med_amp,preceding_amp);
+
+%%%%%%%%end of parameters%%%%%%%%%%
+
+while startchunk < enddatenum
+    endchunk=startchunk+CHUNK;
+    startchunkdate=datestr(startchunk,'yyyy-mm-dd HH:MM:SS');
+    endchunkdate=datestr(endchunk+20/60/60/24,'yyyy-mm-dd HH:MM:SS');
+    disp(startchunkdate)
+    
+    url = ['https://service.iris.edu/fdsnws/dataselect/1/query?'...
+    'net=OO&sta=AXBA1&loc=--&cha=HHZ'...
+    '&start=' datestr(startchunk,'yyyy-mm-ddTHH:MM:SS')...
+    '&end='   datestr(endchunk+20/60/60/24,'yyyy-mm-ddTHH:MM:SS')];
+    tmpfile = tempname;
+    try
+     disp(url);
+     websave(tmpfile, url);
+     raw = rdmseed(tmpfile);
+    catch err
+    disp(['Error: ' err.message]);
+    if exist(tmpfile, 'file'), delete(tmpfile); end
+    startchunk = endchunk;
+    continue
+    end
+    delete(tmpfile);
+
+% Reformat rdmseed output to match irisFetch trace structure
+mytrace = struct();
+if ~isempty(raw)
+    mytrace(1).data = double(vertcat(raw.d));
+    mytrace(1).sampleRate  = raw(1).SampleRate;
+    mytrace(1).startTime   = datenum(raw(1).RecordStartTime);
+    mytrace(1).sensitivity = 1;  % rdmseed doesn't fetch PZ, so scale=1
+    mytrace(1).network     = 'OO';
+    mytrace(1).station     = 'AXBA1';
+else
+    mytrace = [];
+end
+    %mytrace.data_scale=mytrace.data./mytrace.sensitivity;
+    %Get data if using Input file:
+    %f = 'G03BBHZ.20121110-20121115';	% root of filename for Cascadia files
+    
+     %%
+%     %Test files for development
+%     filename = ['/Users/wader/Mirror/matlab/new_blues/sgramcorr_MichelleWeirathmueller_COMPLETE/GB380_weak.wav'];
+%     %sRate_override = 100;
+%     [mytrace.data,mytrace.sampleRate] = soundIn(filename);
+%     %mytrace.data=mytrace.data./150594000;
+%     mytrace.startTime=datenum(2012,1,1)
+%     mytrace.network='XO'
+%     mytrace.station='GB380'
+    %%
+    init_T=table(duration,end_epoch,end_time,min_signal,...
+        peak_signal,peak_epoch,peak_time,start_epoch,start_time,snr,...
+        ambient_snr,peak_frequency,start_frequency, end_frequency,...
+        peak_frequency_std, start_frequency_std,end_frequency_std,threshold,...
+        station_code,network_code,peak_amp,med_amp,preceding_amp);
+    
+    for j=1:length(mytrace)
+        disp(mytrace(j).station);
+        sRate_override = mytrace(j).sampleRate;
+        data=mytrace(j).data;
+        data_scaled=mytrace(j).data./mytrace(j).sensitivity;
+        %data_scaled=mytrace(j).data./150594000;
+        starttime=mytrace(j).startTime;
+        
+        if length(data) <  sRate_override.*MINSECONDS
+            continue
+        end
+        
+        % Spectrogram parameters for a frame size of ~4.0 s and overlap fraction of 1/4:
+        gramParams = struct(...
+            'frameSizeS',  5.0,...   % amount of time-series data per gram time
+            ...                      % slice, in seconds
+            'overlapFrac', 0.95, ... % amount of overlap between succesive frames
+            'zeroPadFrac', 0.0, ...  % amount of zero-padding added to the frameSize
+            ...                      % data points before the FFT is calculated
+            'winType', 'hanning');   % FFT window type
+        
+        % Normalization parameters
+        normTime = 30;	% exponential decay time constant, seconds
+        normFreq = 3;   % exponential decay frequency constant, Hz
+        % This defines a s'gram corrlation kernel with a single downsweep from 15.7 Hz
+        % to 14.4 Hz, with 10 s duration and bandwidth 0.5 Hz:
+        %kerspec = [1  16  14  0  20  1]; %Strong tuned
+        %kerspec = [1  13.7  13.2  0  15  1]; %A tuned
+        startf=18;
+        endf=13;
+        %startf=15.5;
+        %endf=14.2;
+        windowtop=[startf startf*2 startf*3];
+        windowbottom=[endf endf*2 endf*3];
+        kerspec = [1  startf endf  0  20  .5];
+        %             0  0  0  0  0  0
+        %             1  startf*2  endf*2  0  15  1
+        %             0  0  0  0  0  0
+        %             1  startf*3  endf*3  0  15  1]; %Strong tuned
+        %         kerspec = [1  16 14  0  20  1
+        %                     0  0  0  0  0  0
+        %                     1  31  28.5  0  20  1
+        %                     0  0  0  0  0  0
+        %                     1  47.5  42.5  0  20  2]; %Strong tuned
+        
+        kerspec3 = [1  startf*3  endf*3  0  20  .5]; %Second harmonic
+        %%%%%%%%%%%%%%%%%%%%%%%%%%%% end of configuration %%%%%%%%%%%%%%%%%%%%%%%%%%%%
+        
+        
+        % Read in the samples and sample rate.
+        
+        data1=data;
+        data_scaled1=data_scaled;
+        naninds=find(isnan(data));
+        data1(naninds)=median(data,'omitnan'); %replace nans with mean of series
+        data_scaled1(naninds)=median(data_scaled,'omitnan');
+        
+        sRate = sRate_override;
+        topfilt=sRate./2-.1;
+        [b,a]=butter(4,[2/(sRate/2) topfilt/(sRate/2)]); % Bandpass filter prior to spectrogram calculation
+        datafilt1=filtfilt(b,a,data1(:));
+        datafilt_scaled=filtfilt(b,a,data_scaled1(:));
+
+        [b,a]=butter(4,[14/(sRate/2) 16/(sRate/2)]); % Bandpass filter for amplitude measurements
+        datafilt=filtfilt(b,a,data_scaled1(:));
+        secondsInData=length(data)./sRate;
+        data_seconds=[1:length(datafilt)]./sRate;
+        amp_median=median(abs(datafilt));
+        % Calculate gram. This also adds a bunch of fields to gramParams with values
+        % in samples instead of seconds; see davespect.m for details.
+        [gram,fRate,gramParams] = davespect(datafilt1, gramParams, sRate);
+        [gram_scaled,fRate,gramParams] = davespect(datafilt_scaled, gramParams, sRate);
+
+                %Calculate frequency and time values for spectrogram
+        [x,y]=size(gram);
+        Fvec=[1:x]./(x/(sRate/2));
+        Tvec=[1:y].*(secondsInData./y);
+
+
+
+        %%
+
+        % Normalize using a horizontal decaying-exponential subtraction. This makes all background
+        % noise values close to 0 and makes transient animal calls stand out.
+        normParams = ['e' 0 0 0 normTime];	% see normGram.m for syntax
+        normG_time = normGram(log(gram), sRate, fRate, normParams);
+
+        % Normalize using a vertical decaying-exponential subtraction. This makes all background
+        % noise values close to 0 and makes transient animal calls stand out.
+        normParams2 = ['ve' 0 0 0 normFreq];	% see normGram.m for syntax
+        normG = normGram(normG_time, sRate, fRate, normParams2);
+        
+        
+        
+
+        %%
+        %Stack spectrogram harmonics if high sample rate
+%         if mytrace(j).sampleRate >= 99
+%             first_harm=[14 16];
+%             second_harm=first_harm.*2;
+%             third_harm=first_harm.*3;
+%             first_inds=find(Fvec > first_harm(1) & Fvec < first_harm(2));
+%             second_inds=find(Fvec > second_harm(1) & Fvec < second_harm(2));
+%             third_inds=find(Fvec > third_harm(1) & Fvec < third_harm(2));
+%             
+%             first_spect=normG(first_inds,:);
+%             second_spect=normG(second_inds,:);
+%             third_spect=normG(third_inds,:);
+%             
+%             second_f=second_inds(1):(second_inds(2)-second_inds(1))*2:second_inds(end);
+%             third_f=third_inds(1):(third_inds(2)-third_inds(1))*3:third_inds(end);
+%             
+%             second_f=second_f(1:length(first_inds));
+%             third_f=third_f(1:length(first_inds));
+%             
+%             specsize=size(normG);
+%             second_interp=zeros([length(second_f) specsize(2)]);
+%             third_interp=zeros([length(third_f) specsize(2)]);
+%             
+%             
+%             for col=[1:specsize(2)]
+%                 sec_col=interp1(second_inds,second_spect(:,col),second_f);
+%                 second_interp(:,col)=sec_col;
+%                 third_col=interp1(third_inds,third_spect(:,col),third_f);
+%                 third_interp(:,col)=third_col;
+%             end
+%             
+%             normG(first_inds,:)=(first_spect+second_interp+third_interp);
+%         end
+        
+ %%       
+        % Calculate spectrogram cross-correlation.
+        sgc1 = multiCorr(normG, kerspec, sRate, fRate, gramParams.frameSize, ...
+            gramParams.zeroPad, gramParams.nOverlap, 0);
+        if mytrace(j).sampleRate >= 99
+        sgcupper = multiCorr(normG, kerspec3, sRate, fRate, gramParams.frameSize, ...
+            gramParams.zeroPad, gramParams.nOverlap, 0);
+        sgc1=sgc1+sgcupper;
+        %sgc1=sgcupper;
+        end
+        if PLOTFLAG == 1
+        scalegram=20*log10(gram_scaled);
+        sgc2 = multiCorr(scalegram, kerspec, sRate, fRate, gramParams.frameSize, ...
+            gramParams.zeroPad, gramParams.nOverlap, 0);
+        end
+        
+        
+        if PLOTFLAG == 1;           
+            f19 = figure(19);
+            %Plot simple spectrogram of filtered data
+            ax(2)=subplot(311);
+            imagesc(Tvec,Fvec,scalegram)
+            hold on
+            %colormap('bone')
+            axis xy
+            colormap(flipud(pink))
+            caxis([median(median(scalegram)) median(median(scalegram))+2.5*max(std(scalegram))])
+            xlabel('seconds')
+            ylabel('frequency (Hz)')
+            title('Raw spectrogram')
+            
+            %Plot exponential decay spectrogram
+            ax(1)=subplot(312);
+            imagesc(Tvec,Fvec,normG)
+            hold on
+            %colormap('bone')
+            axis xy
+            colormap(flipud(pink))
+            caxis([median(median(normG)) median(median(normG))+2*mean(std(normG))])
+            xlabel('seconds')
+            ylabel('frequency (Hz)')
+            title('Horizontal + Vertical 2 Hz decaying-exponential subtraction, 2 Hz high pass filter')
+        end
+        
+        % neginds=find(normG < 0);
+        % normG(neginds) = 0;
+        
+        %%
+        %%%%%%%%%%%%%Peak Picking, metrics calculations, and table building%%%%%%%%
+             for m=1
+             sgc=sgc1(m,:);
+             disp(['Max SGC score: ' num2str(max(sgc)) '  Mean: ' num2str(mean(sgc))]);
+    
+             if PLOTFLAG == 1
+                 sgc_raw=sgc2(m,:);
+             end
+    
+             time = (0:length(sgc)-1).' / fRate;
+    
+            % Pick peaks
+             [pks,locs,widths,proms]=findpeaks(sgc,time,'MinPeakHeight',THRESH,'MinPeakDistance',15);
+    
+            % Pick start and end
+             locs_start=locs-widths./2;
+             locs_end=locs+widths./2;
+            
+            
+            
+            %Calculate timing metrics
+            datetime_locs=starttime+locs./SECONDS_IN_DAY; %calculate datenum of picks
+            datetime_start=starttime+locs_start./SECONDS_IN_DAY; %calculate datenum of starts
+            datetime_end=starttime+locs_end./SECONDS_IN_DAY; %calculate datenum of ends
+            peak_epoch=(datetime_locs-datetime_1970).*SECONDS_IN_DAY; %calculate epoch of picks
+            start_epoch=(datetime_start-datetime_1970).*SECONDS_IN_DAY; %calculate epoch of picks
+            end_epoch=(datetime_end-datetime_1970).*SECONDS_IN_DAY; %calculate epoch of picks
+            peak_time1=datestr(datetime_locs,'yyyy-mm-ddTHH:MM:SS.FFFZ');
+            start_time1=datestr(datetime_start,'yyyy-mm-ddTHH:MM:SS.FFFZ');
+            end_time1=datestr(datetime_end,'yyyy-mm-ddTHH:MM:SS.FFFZ');
+
+            peak_time = strings(length(locs),1);
+            start_time = strings(length(locs),1);
+            end_time = strings(length(locs),1);
+            for dates=1:length(locs)
+               peak_time(dates) = datestr(datetime_locs(dates),'yyyy-mm-ddTHH:MM:SS.FFFZ');
+               start_time(dates) = datestr(datetime_start(dates),'yyyy-mm-ddTHH:MM:SS.FFFZ');
+               end_time(dates) = datestr(datetime_end(dates),'yyyy-mm-ddTHH:MM:SS.FFFZ');
+            end
+            
+            
+            %Calculate call metrics
+            duration=widths;
+            peak_signal=pks.';
+            snr_start=locs-SNR_LENGTH./2;
+            snr_end=locs+SNR_LENGTH./2;
+            
+            %Preallocate vectors for call metrics
+            peak_frequency=zeros(length(pks),1);
+            snr=zeros(length(pks),1);
+            ambient_snr=zeros(length(pks),1);
+            peak_frequency_std=zeros(length(pks),1);
+            start_frequency=zeros(length(pks),1);
+            end_frequency=zeros(length(pks),1);
+            start_frequency_std=zeros(length(pks),1);
+            end_frequency_std=zeros(length(pks),1);
+            start_t_calc=zeros(length(pks),1);
+            end_t_calc=zeros(length(pks),1);
+            peak_amp=zeros(length(pks),1);
+            med_amp=zeros(length(pks),1);
+            preceding_amp=zeros(length(pks),1);
+            
+            
+            %duration=zeros(length(pks),1);
+            
+            
+            
+            %Calculate Call metrics
+            for k=1:length(pks)
+                %Peak metrics
+                snr_tinds = find(Tvec <= snr_end(k) & Tvec >= snr_start(k));
+                band_finds = find(Fvec <= windowtop(m) & Fvec >= windowbottom(m));
+                gramsub_scale=normG(band_finds,snr_tinds); %grab spectrogram subset
+                gramsub=gramsub_scale+abs(min(min(gramsub_scale))); %make sure there are no negative spectrogram values
+                Fmat=repmat(Fvec(band_finds).',1,size(gramsub,2));
+                Tmat=repmat(Tvec(snr_tinds),size(gramsub,1),1);
+                peak_f = sum(sum(Fmat.*gramsub))./sum(sum(gramsub)); %Calculate peak frequency
+                peak_t = sum(sum(Tmat.*gramsub))./sum(sum(gramsub)); %Calculate time of peak frequency
+                peak_std = sum(sum((Fmat-mean(Fmat,'all')).^2.*gramsub))./sum(sum(gramsub)); %Calculate standard deviation of peak frequency
+                
+                %Start metrics
+                startf_tinds=find(Tvec <= peak_t-0 & Tvec >= peak_t-10);
+                %startband_finds = find(Fvec <= peak_f+1.5 & Fvec >= peak_f);
+                startband_finds = find(Fvec <= windowtop(m) & Fvec >= windowbottom(m));
+                gramsub_scale=normG(startband_finds,startf_tinds); %grab spectrogram subset
+                gramsub=gramsub_scale+abs(min(min(gramsub_scale))); %make sure there are no negative spectrogram values
+                Fmat=repmat(Fvec(startband_finds).',1,size(gramsub,2));
+                Tmat=repmat(Tvec(startf_tinds),size(gramsub,1),1);
+                start_f = sum(sum(Fmat.*gramsub))./sum(sum(gramsub)); %Calculate peak frequency
+                start_t = sum(sum(Tmat.*gramsub))./sum(sum(gramsub)); %Calculate time of peak frequency
+                start_std = sum(sum((Fmat-mean(Fmat,'all')).^2.*gramsub))./sum(sum(gramsub)); %Calculate standard deviation of peak frequency
+                
+                %End metrics
+                endf_tinds=find(Tvec <= peak_t+10 & Tvec >= peak_t+0);
+                %endband_finds = find(Fvec <= peak_f & Fvec >= peak_f-1.5);
+                endband_finds = find(Fvec <= windowtop(m) & Fvec >= windowbottom(m));
+                gramsub_scale=normG(endband_finds,endf_tinds); %grab spectrogram subset
+                gramsub=gramsub_scale+abs(min(min(gramsub_scale))); %make sure there are no negative spectrogram values
+                Fmat=repmat(Fvec(endband_finds).',1,size(gramsub,2));
+                Tmat=repmat(Tvec(endf_tinds),size(gramsub,1),1);
+                end_f = sum(sum(Fmat.*gramsub))./sum(sum(gramsub)); %Calculate peak frequency
+                end_t = sum(sum(Tmat.*gramsub))./sum(sum(gramsub)); %Calculate time of peak frequency
+                end_std = sum(sum((Fmat-mean(Fmat,'all')).^2.*gramsub))./sum(sum(gramsub)); %Calculate standard deviation of peak frequency
+                
+%                 %SNR metrics
+%                 snr_tinds = find(Tvec <= snr_end(k) & Tvec >= snr_start(k));
+%                 snr_finds = find(Fvec <= peak_f+.5 & Fvec >= peak_f-.5);
+%                 gramsub_scale=gram_scaled(snr_finds,snr_tinds);
+%                 gramsub=gramsub_scale;%+abs(min(min(gramsub_scale)));
+%                 signal=mean2(gramsub_scale);
+%                 %noise=median(normG(snr_finds,:),'all');
+%                 noise=mean2(gram_scaled(band_finds,:));
+%                 sigtonoise=signal./noise;
+%                 
+%                 %SNR ambient metrics
+%                 snram_tinds = find(Tvec <= snr_start(k)-15 & Tvec >= snr_start(k)-20);
+%                 snram_finds = find(Fvec <= peak_f+.5 & Fvec >= peak_f-.5);
+%                 gramsub_scale=gram_scaled(snram_finds,snram_tinds);
+%                 gramsub=gramsub_scale;%+abs(min(min(gramsub_scale)));
+%                 signalam=mean2(gramsub_scale);
+%                 %noise=median(normG(snr_finds,:),'all');
+%                 noiseam=mean2(gram_scaled(band_finds,:));
+%                 sigtonoiseam=signalam./noiseam;
+
+                %Calculations from timeseries
+                timeinds=find(data_seconds <= peak_t+5 & data_seconds >= peak_t-5);
+                if peak_t > 30
+                timeinds_ambient=find(data_seconds <= peak_t-15 & data_seconds >= peak_t-25);
+                else
+                timeinds_ambient=find(data_seconds <= peak_t+30 & data_seconds >= peak_t+20);   
+                end
+                    
+                amp_peak=max(datafilt(timeinds));
+                prec_amp=median(abs(datafilt(timeinds_ambient)));
+                sigtonoise=max(abs(datafilt(timeinds)))./amp_median;
+                sigtonoiseam=max(abs(datafilt(timeinds_ambient)))./amp_median;        
+                
+                
+                peak_frequency(k)=peak_f;
+                snr(k)=sigtonoise;
+                ambient_snr(k)=sigtonoiseam;
+                peak_frequency_std(k)=peak_std;
+                start_frequency(k)=start_f;
+                end_frequency(k)=end_f;
+                start_frequency_std(k)=start_std;
+                end_frequency_std(k)=end_std;
+                start_t_calc(k)=start_t;
+                end_t_calc(k)=end_t;
+                peak_amp(k)=amp_peak;
+                med_amp(k)=amp_median;
+                preceding_amp(k)=prec_amp;
+                %duration(k)=end_t-start_t;
+                
+                if PLOTFLAG == 1;
+                    f19 = figure(19);
+                    if start_f >= end_f;
+                        plot([start_t end_t],[start_f end_f],'g-o','Linewidth',3)
+                    elseif start_f < end_f;
+                        plot([start_t end_t],[start_f end_f],'y-o','Linewidth',3)
+                    end
+                    plot(locs(k),peak_f,'r.','Markersize',10)
+                    plot([locs(k) locs(k)],[0 50],'r-.','Markersize',10)
+                end
+                
+            end
+            
+            %Store station and network metrics
+            network_code=repmat(convertCharsToStrings(mytrace(j).network),length(pks),1);
+            station_code=repmat(convertCharsToStrings(mytrace(j).station),length(pks),1);
+            threshold=repmat(THRESH,length(pks),1);
+            min_signal=repmat(0,length(pks),1);
+            
+            %%%%%%%%%%%%%%Plotting%%%%%%%%%%%%%%
+            
+            %Plot picked peaks
+            if PLOTFLAG == 1;
+                figure(19);
+                ax(3)=subplot(313);
+                plot(time,sgc_raw,'g-','Linewidth',2);
+                hold on;
+                plot(time,sgc,'b','Linewidth',2);
+                plot(locs,pks,'ro')
+                xlabel('seconds')
+                ylabel('detection score')
+                legend('raw','filtered')
+                linkaxes(ax,'x');
+                title('Detection score from filtered spectrogram')
+                %meh=ginput(1);
+                %clf;
+            end
+            %%%%%%%%%%%%%%%write table%%%%%%%%%%%%
+
+            if isempty(pks)
+                continue
+            end
+            disp(['duration: ' num2str(length(duration))]);
+            disp(['end_epoch: ' num2str(length(end_epoch))]);
+            disp(['end_time: ' num2str(length(end_time))]);
+            disp(['peak_signal: ' num2str(length(peak_signal))]);
+            disp(['peak_time: ' num2str(length(peak_time))]);
+            disp(['start_time: ' num2str(length(start_time))]);
+            disp(['snr: ' num2str(length(snr))]);
+            disp(['peak_frequency: ' num2str(length(peak_frequency))]);
+            disp(['station_code: ' num2str(length(station_code))]);
+            disp(['network_code: ' num2str(length(network_code))]);
+            disp(['threshold: ' num2str(length(threshold))]);
+
+            T=table(duration,end_epoch,end_time,min_signal,...
+                peak_signal,peak_epoch,peak_time,start_epoch,start_time,snr,...
+                ambient_snr,peak_frequency,start_frequency, end_frequency,...
+                peak_frequency_std, start_frequency_std,end_frequency_std,threshold,...
+                station_code,network_code,peak_amp,med_amp,preceding_amp);
+            
+            init_T=[init_T; T];
+            
+            
+            %close all;
+        end
+    end
+    
+    writetable(init_T,['/Users/connor.hipp/Desktop/MATLAB/BlueDets/AXAB1' datestr(startchunk,'yyyy-mm-ddTHHMMSS') '_' datestr(endchunk,'yyyy-mm-ddTHHMMSS') 'BW_0.5Hz.csv'],'Delimiter',',');
+    startchunk=endchunk;%startchunk+time(end)./SECONDS_IN_DAY;
+end
