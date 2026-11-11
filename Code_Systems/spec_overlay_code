@@ -1,0 +1,197 @@
+import sys
+
+sys.path.append('/Users/victoria.burghardt/Documents/GitHub/whaletracks') #allows us to import my written function 
+
+#imports neccessary functions for code
+from obspy.clients.fdsn import Client
+from obspy import UTCDateTime
+from obspy import read, read_inventory
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import matplotlib.colors as color
+import sys
+import os
+import pickle as pickle
+from datetime import datetime
+import scipy.signal as sig
+import whaletracks.detection.detect_manual as detect
+from whaletracks.common.util import datestrToEpoch
+
+#Define constants
+HALF_HOUR = 1800  # in seconds
+CHUNK_LENGTH=HALF_HOUR/2  #Sets spectrogram time chunk. 15 minutes is ideal for selecting blue whale calls.
+PLOTFLAG=True #keep this true since you are manually picking
+CHUNK_FILE='Blue_picks.csv' #csv that is extended with each time period
+detection_pth="Final_blue_picks.csv" #final .csv name
+is_restart='True' #Keep this true to use chunk file
+CLIENT_CODE = 'IRIS' #obspy gets data from IRIS
+network="Z5" #7D for cascadia (ends in C), Z5 for GDZ (ends in 0)
+station_id_list=['BB640']#Pick 1 station at a time
+location='*'  # '*' for all available locations
+channel='HDH,HXH' #Choose channel from specific station,  you'll want 'BHZ,HHZ' for Cascadia
+                      #Check http://ds.iris.edu/mda/OO/ for OOI station channels
+
+#Select start and end times for manual picking
+STARTTIME = ("2014-01-05T10:30:00.00")
+ENDTIME = ("2014-01-05T18:45:00.00")
+
+
+##########################################################################################
+#################End of constants. Change beyond this point at your own risk!###################################
+##########################################################################################
+
+code_path = '/Documents/GitHub/whaletracks/whaletracks/detection'
+csv_path =  '/Users/victoria.burghardt/Downloads/Research/BB640/plot_data_BB640.csv'
+
+sys.path.append(code_path)
+
+utcstart = UTCDateTime(STARTTIME)
+utcend = UTCDateTime(ENDTIME[:19])  # 'YYYY-MM-DDTHH:MM:SS'
+
+
+utcstart_chunk = utcstart 
+utcend_chunk = utcstart + CHUNK_LENGTH    
+
+client=Client(CLIENT_CODE)
+
+#Defines dataframe structure: don't mess with this
+df_columns=['pick_time','pick_epoch','start_frequency','snr','call_type','ambient_snr','station','channel','peak_frequency','peak_frequency_std','note_start_time','note_end_time']
+# add'pfreq_time'
+while utcend > utcstart_chunk:
+
+    #Either load working verification file or make a new one
+    if os.path.isfile(CHUNK_FILE) and is_restart:
+        Blue_calls = pd.read_csv(CHUNK_FILE)
+        Blue_calls = pd.read_csv(CHUNK_FILE).dropna(how='all')
+    else:
+        Blue_calls = pd.DataFrame(columns=df_columns)
+        
+
+    for station_ids in station_id_list:  #loops through stations requested. Reccomend 1 station at a time however. 
+        st_raw_exist = False
+        retry=0
+        
+
+        #Get waveform from IRIS
+
+        print(f"\nProcessing chunk starting at {utcstart_chunk}")
+
+        while st_raw_exist == False and retry < 5:
+                try:
+                    st_raw=client.get_waveforms(network=network, station=station_ids, location=location,
+                                                channel=channel, starttime=utcstart_chunk,
+                                                endtime=utcend_chunk, attach_response=True)
+                    st_raw_exist=True
+                    retry=5
+                except: #If request fails, try again up to 5 times
+                    retry=retry+1
+                    st_raw_exist=False
+                    print("Client failed: Retry " + str(retry) + " of 5 attempts")
+
+        #If data does not exist, move on to next time chunk            
+        if st_raw_exist == False:
+                print("WARNING: no data available from input station/times")
+                utcstart_chunk=utcstart_chunk+CHUNK_LENGTH
+                utcend_chunk=utcend_chunk+CHUNK_LENGTH
+                
+                continue
+
+        #Filter waveform, remove response, remove sensitivity
+        st_raw.detrend(type="demean")
+        st_raw.detrend(type="linear")
+        st_raw.remove_response(output='VEL',pre_filt=[.2,.5,18,20])
+        st_raw.remove_sensitivity()
+
+        tr=st_raw[0]
+
+        #specifically select waveform            
+        tr_filt=tr.copy()
+
+        #Make spectrogram of data
+        [f,t,Sxx]=detect.plotwav(tr_filt.stats.sampling_rate, tr_filt.data, window_size=8, overlap=.98, plotflag=False)
+        
+
+        #Subsample spectrogram to call range and convert to dB
+        freq_inds=np.where(np.logical_and(f>=13, f<=16.5))
+        f_sub=f[freq_inds]
+        Sxx_sub=Sxx[freq_inds,:][0]
+        Sxx_log1=10*np.log10(Sxx_sub)
+        Sxx_log=Sxx_log1-np.min(Sxx_log1)
+
+        #Choose color range for spectrogram
+        vmin=np.median(Sxx_log)+2*np.std(Sxx_log)
+        vmax=np.median(Sxx_log)
+
+        
+        if PLOTFLAG==True:
+                
+            t1=min(t)
+            t2=max(t)
+        #Make figure and plot axis
+            fig = plt.figure(figsize=(12, 4))
+            ax1 = fig.add_subplot(111)
+            #import pdb; pdb.set_trace()
+            
+        #plot spectrogram and prepare for user input
+            cmap = plt.get_cmap('viridis')
+            norm = color.Normalize(vmin=vmin, vmax=vmax)
+            im = ax1.pcolormesh(t, f_sub, Sxx_log, cmap=cmap,norm=norm) 
+            fig.colorbar(im, ax=ax1,orientation='horizontal')
+            ax1.set_xlim([t1, t2]) #look at spectrogram segment between given time boundaries
+            ax1.set_ylim([13, 16.5])
+            ax1.set_ylabel('Frequency [Hz]')
+            ax1.set_xlabel('Seconds past ' + UTCDateTime.strftime(utcstart_chunk,'%Y-%m-%dT%H:%M:%S.%fZ'))
+            ax1.set_title('Select calls')
+            fig.tight_layout()
+
+            #import pdb; pdb.set_trace()
+
+# Load plot overlay data
+            plot_data = pd.read_csv(csv_path)
+            plot_data['note_start_time'] = pd.to_datetime(plot_data['note_start_time'], format='mixed').dt.tz_localize('UTC') #convert note_start_time and end_time to datetimes and extract from csv (unecessary?)
+            plot_data['note_end_time'] = pd.to_datetime(plot_data['note_end_time'], format='mixed').dt.tz_localize('UTC')
+
+            chunk_start_pd = pd.Timestamp(str(utcstart_chunk))    # will be tz-aware UTC 
+            chunk_end_pd = pd.Timestamp(str(utcend_chunk))
+
+
+
+# Extract relevant columns as arrays
+
+            in_chunk_mask = (plot_data['note_start_time'] <= chunk_end_pd) & (plot_data['note_end_time'] >= chunk_start_pd) #determines which start times and end times are in the current chunk 
+            chunk_notes = plot_data.loc[in_chunk_mask] 
+
+            # Convert absolute times to relative seconds within this chunk for plotting (<=900)
+            chunk_notes['rel_start_sec'] = (chunk_notes['note_start_time'] - chunk_start_pd).dt.total_seconds() #takes dt note_start_time (absolute) and makes it relative to the 900 second windows 
+            chunk_notes['rel_end_sec'] = (chunk_notes['note_end_time'] - chunk_start_pd).dt.total_seconds()
+
+            # Overlay horizontal lines for each note within the chunk
+            for i, row in chunk_notes.iterrows():
+                ax1.hlines(y=row['peak_frequency'], xmin=row['rel_start_sec'], xmax=row['rel_end_sec'], #* potential issue is the note duration may be different than the length around the peak frequency
+                           color='red', linewidth=2,
+                           label='Peak Frequency for Note Duration' if i == chunk_notes.index[0] else "")
+
+            # Add legend if there are any lines
+            if not chunk_notes.empty:
+                ax1.legend()
+
+            fig.tight_layout()
+            plt.show()
+            save_results_to = '/Users/victoria.burghardt/Downloads/Research'
+            filename = f'spec_{station_ids}_{utcstart_chunk}.png'
+            fig.savefig(os.path.join(save_results_to, filename))
+
+            plt.close()
+
+            print(f'Finished chunk: {utcstart_chunk}')
+
+            # Move to next chunk (important: do it outside plotting so loop progresses)
+            utcstart_chunk += CHUNK_LENGTH
+            utcend_chunk += CHUNK_LENGTH
+
+            print(f'Moving to next chunk: {utcstart_chunk}')
+
+
+
+
